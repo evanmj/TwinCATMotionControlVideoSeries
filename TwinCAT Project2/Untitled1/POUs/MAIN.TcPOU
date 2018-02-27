@@ -1,0 +1,452 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4022.9">
+  <POU Name="MAIN" Id="{53de4ad1-482e-4350-a93f-8d5c37cbb918}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+	
+    heartbeat : BYTE;
+	
+	// Outputs.
+	one AT %Q* : BOOL;
+	two AT %Q* : BOOL;
+	three AT %Q* : BOOL;
+	four AT %Q* : BOOL;
+	
+	prox AT %I* : BOOL;  // Input
+	
+	// Dynamic Throttle
+	Throttle AT %I* : INT;
+	LastThrottle : INT;
+	
+	AxisB : AXIS_REF;
+
+	McPower : MC_Power;
+	McReset : MC_Reset;
+	McJogging : MC_Jog;
+	McVelocity : MC_MoveVelocity;
+	McStop : MC_Stop;
+	McHome : MC_Home;
+
+	
+    CurrentVelocityCmd : DINT;
+
+	iState : DINT; // My State
+
+	McMoveAbs : MC_MoveAbsolute;
+	McMoveRel : MC_MoveRelative;
+	iNumMoves : DINT:= 5;
+	iCurrMove : DINT;
+	fMoveDistEachTime : REAL:= 10;
+	fRelMoveDist : REAL;
+	
+	TcJoy : FB_TcJoy;
+
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[heartbeat := heartbeat + 1;
+
+CurrentVelocityCmd := MAP(Throttle,29800,22600,0,2800);
+IF CurrentVelocityCmd < 50 THEN
+	CurrentVelocityCmd := 0;
+END_IF
+
+AxisB.ReadStatus();
+
+McPower(Axis:=AxisB,Enable:=TRUE,Enable_Positive:=TRUE,Enable_Negative:=TRUE);
+McReset(Axis:=AxisB);
+McJogging(Axis:=AxisB);
+McHome(Axis:=AxisB,bCalibrationCam := prox);
+
+McMoveAbs(Axis:=AxisB);
+McMoveRel(Axis:=AxisB);
+
+TcJoy();
+
+CASE iState OF
+	
+    0:  // Initial
+
+		iState := 10;
+
+    10:  // Start Drive Reset
+
+		McHome(Axis:=AxisB,Execute:=FALSE);
+		McReset(Axis:=AxisB,Execute:=TRUE);
+		IF McReset.Done THEN
+			iState :=20;
+		ELSIF McReset.Error THEN
+			iState := 999;
+		END_IF
+
+    20:  // Wait for Drive to Reset
+
+		IF McPower.Status AND (CurrentVelocityCmd > 1000 OR TcJoy.Y_Button) THEN
+			iState := 100;
+		END_IF	
+		
+    30:  // Wait for drive JOG command.
+    
+		IF TcJoy.iRightTrigger_Axis > 0 THEN
+	
+			IF TcJoy.iRightStick_X_Axis > 0 THEN
+				McJogging.JogForward := TRUE;
+				McJogging.Velocity := ABS(MAP(TcJoy.iRightStick_X_Axis,6000,32767,0,720));
+			ELSE
+				McJogging.JogForward := FALSE;
+			END_IF
+			IF TcJoy.iRightStick_X_Axis < 0 THEN
+				McJogging.JogBackwards := TRUE;
+				McJogging.Velocity := ABS(MAP(TcJoy.iRightStick_X_Axis,-6000,-32767,0,720));				
+			ELSE
+				McJogging.JogBackwards := FALSE;
+			END_IF
+			IF TcJoy.iRightStick_X_Axis = 0 THEN
+				McJogging.JogForward := FALSE;
+				McJogging.JogBackwards := FALSE;
+			END_IF
+			
+			McJogging.Mode := MC_JOGMODE_CONTINOUS;
+			McJogging.Acceleration := 500;
+			McJogging.Deceleration := 500;
+			McJogging.Jerk := 1000000;
+			McJogging(Axis:=AxisB);
+			
+		ELSE
+			McJogging.JogForward := FALSE;
+			McJogging.JogBackwards := FALSE;
+			iState := 200;
+		END_IF 
+		
+	40:  // Wait for velocity command.
+	
+	//	McVelocity(Axis:=AxisB,
+	//			Velocity:=CurrentVelocityCmd,
+	///			Acceleration:=10000,
+	//			Deceleration:=10000,
+	//			Jerk:=1000000,
+	//			Direction:=MC_Direction.MC_Positive_Direction,
+	//			Execute:=prox AND (LastThrottle<>Throttle));
+	//	IF NOT prox THEN
+	//		McVelocity(Axis:=AxisB,Execute:=FALSE);
+	//		iState := 900;
+	//	END_IF				
+	//	
+		
+		IF TcJoy.iLeftTrigger_Axis > 0 THEN
+			
+			McStop(Axis:=AxisB,Execute:=FALSE);
+			
+			IF TcJoy.iRightStick_X_Axis > 0 THEN
+				McVelocity.Velocity := ABS(MAP(TcJoy.iRightStick_X_Axis,6000,32767,0,720));
+			END_IF
+			IF TcJoy.iRightStick_X_Axis < 0 THEN
+				McVelocity.Velocity := ABS(MAP(TcJoy.iRightStick_X_Axis,-6000,-32767,0,720));				
+			END_IF
+			IF TcJoy.iRightStick_X_Axis = 0 THEN
+				McVelocity.Velocity := 0;
+			END_IF
+
+			McVelocity(Axis:=AxisB, Execute:=LastThrottle<>Throttle);
+			
+		ELSE
+			McVelocity(Axis:=AxisB, Execute:=FALSE);
+			McStop(Axis:=AxisB,Execute:=TRUE);
+			iState := 200;
+		END_IF 
+		
+		LastThrottle:=Throttle;
+		
+	100:  // Start Homing Process.
+		
+		McHome(Axis:=AxisB,bCalibrationCam:=prox,Execute:=TRUE);
+		IF McHome.Busy THEN
+			iState := 110;
+		END_IF
+		
+	110: // Homing running, wait for homing to complete.
+	
+		IF McHome.Done AND NOT McHome.Error THEN
+			McHome(Axis:=AxisB,Execute:=FALSE);
+			iState := 200;
+		ELSIF McHome.Error THEN
+			McHome(Axis:=AxisB,Execute:=FALSE);
+			iState := 999;
+		END_IF
+		
+	200: // Homing Complete.  Ready to Run.
+		
+		IF TcJoy.Y_Button THEN // Home
+			iState := 100;	
+		END_IF
+		IF TcJoy.B_Button THEN // Run dance move
+			iState := 300;
+		END_IF
+		IF TcJoy.iRightTrigger_Axis > 0 THEN // Jog with joystick
+			iState := 30;
+		END_IF
+		IF TcJoy.iLeftTrigger_Axis > 0 THEN // ABS with joystick
+			iState := 600;
+		END_IF
+		
+ 	300:  // Start ABS Move to center to prep for processing part
+	
+	    McMoveAbs(Axis:=AxisB,
+					Position := 100,
+					Velocity := 100,
+					Acceleration := 500,
+					Deceleration := 500,
+					Jerk := 100000,
+					Execute:=TRUE);
+					
+		iState := 310;
+		
+	310:  // Wait for abs move to complete.
+	
+	    IF McMoveAbs.Done AND NOT McMoveAbs.Error THEN
+			McMoveAbs(Axis:=AxisB,Execute:=FALSE);
+			iCurrMove := 1;
+			iState := 400;
+		ELSIF McMoveAbs.Error THEN
+			McMoveAbs(Axis:=AxisB,Execute:=FALSE);
+			iState := 999;	
+		END_IF
+		
+	400:  // Start Rel Moves.
+	
+	    // More to do?
+		IF iCurrMove < iNumMoves THEN
+			// increment move counter for next time.
+			iCurrMove := iCurrMove + 1;
+			// Calculate Distance
+			fRelMoveDist := DINT_TO_REAL(iCurrMove) * fMoveDistEachTime;
+			iState := 410;
+		ELSE
+			// Nothing to do.
+			iState := 500;
+		END_IF
+		
+	410:  // Start rel move in pos direction
+		
+	    McMoveRel(Axis:=AxisB,
+					Distance := fRelMoveDist,
+					Velocity := 720,
+					Acceleration := 2000,
+					Deceleration := 2000,
+					Jerk := 1000000,
+					Execute:=TRUE);
+					
+		iState := 420;
+		
+	420:  // Wait on rel move to complete
+	
+		IF McMoveRel.Done AND NOT McMoveRel.Error THEN
+			McMoveRel(Axis:=AxisB,Execute:=FALSE);
+			iState := 450;
+		ELSIF McMoveRel.Error THEN
+			McMoveRel(Axis:=AxisB,Execute:=FALSE);
+			iState := 999;	
+		END_IF
+		
+	450:  // Move negative rel back to start position
+					
+		McMoveRel(Axis:=AxisB,
+					Distance := -fRelMoveDist,
+					Velocity := 720,
+					Acceleration := 2000,
+					Deceleration := 2000,
+					Jerk := 1000000,
+					Execute:=TRUE);
+					
+		iState := 460;
+		
+	460:  // Wait on rel move to complete
+	
+		IF McMoveRel.Done AND NOT McMoveRel.Error THEN
+			McMoveRel(Axis:=AxisB,Execute:=FALSE);
+			iState := 400;
+		ELSIF McMoveRel.Error THEN
+			McMoveRel(Axis:=AxisB,Execute:=FALSE);
+			iState := 999;	
+		END_IF
+
+	500:  // Start ABS Move Back to home
+	
+	    McMoveAbs(Axis:=AxisB,
+					Position := 0,
+					Velocity := 100,
+					Acceleration := 100,
+					Deceleration := 100,
+					Jerk := 100000,
+					Execute:=TRUE);
+					
+		iState := 510;
+		
+	510:  // Wait for abs move to complete.
+	
+	    IF McMoveAbs.Done AND NOT McMoveAbs.Error THEN
+			McMoveAbs(Axis:=AxisB,Execute:=FALSE);
+			iCurrMove := 1;
+			iState := 200;
+		ELSIF McMoveAbs.Error THEN
+			McMoveAbs(Axis:=AxisB,Execute:=FALSE);
+			iState := 999;	
+		END_IF		
+		
+		
+	600:   // Start ABS Move from joystick
+	
+		IF TcJoy.iLeftTrigger_Axis > 0 THEN
+	
+			IF TcJoy.iRightStick_X_Axis > 0 THEN
+				McMoveAbs.Position := ABS(MAP(TcJoy.iRightStick_X_Axis,6000,32767,100,200));
+			END_IF
+			IF TcJoy.iRightStick_X_Axis < 0 THEN
+				McMoveAbs.Position := ABS(MAP(TcJoy.iRightStick_X_Axis,-32767,-6000,0,100));				
+			END_IF
+			IF TcJoy.iRightStick_X_Axis = 0 THEN
+				McMoveAbs.Position := 100;
+			END_IF
+
+			McMoveAbs(Axis:=AxisB,
+					Velocity := 500,
+					Acceleration := 500,
+					Deceleration := 2000,
+					Jerk := 1000000,
+					Execute:=TRUE);
+					
+			iState := 610;
+			
+		ELSE
+			McMoveAbs(Axis:=AxisB,Execute:=FALSE);
+			iState := 200;
+		END_IF 
+	
+
+		
+	610:  // Wait for abs move to complete.
+	
+	    IF McMoveAbs.Done AND NOT McMoveAbs.Error THEN
+			McMoveAbs(Axis:=AxisB,Execute:=FALSE);
+			iState := 600;
+		ELSIF McMoveAbs.Error THEN
+			McMoveAbs(Axis:=AxisB,Execute:=FALSE);
+			iState := 999;	
+		END_IF	
+	
+	900:  // Stop servo.
+	
+	    McStop(Axis:=AxisB,Execute:=TRUE);
+		IF prox THEN
+			McStop(Axis:=AxisB,Execute:=FALSE);
+			iState := 40;
+		END_IF
+	
+	999: // Handle Error (TODO)
+
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="MAIN">
+      <LineId Id="246" Count="1" />
+      <LineId Id="2" Count="0" />
+      <LineId Id="298" Count="2" />
+      <LineId Id="108" Count="0" />
+      <LineId Id="103" Count="0" />
+      <LineId Id="62" Count="0" />
+      <LineId Id="163" Count="2" />
+      <LineId Id="110" Count="0" />
+      <LineId Id="802" Count="0" />
+      <LineId Id="810" Count="0" />
+      <LineId Id="482" Count="0" />
+      <LineId Id="955" Count="0" />
+      <LineId Id="954" Count="0" />
+      <LineId Id="111" Count="0" />
+      <LineId Id="145" Count="6" />
+      <LineId Id="344" Count="0" />
+      <LineId Id="152" Count="1" />
+      <LineId Id="167" Count="1" />
+      <LineId Id="170" Count="1" />
+      <LineId Id="169" Count="0" />
+      <LineId Id="154" Count="1" />
+      <LineId Id="174" Count="0" />
+      <LineId Id="182" Count="0" />
+      <LineId Id="185" Count="1" />
+      <LineId Id="957" Count="0" />
+      <LineId Id="159" Count="1" />
+      <LineId Id="1027" Count="1" />
+      <LineId Id="1010" Count="1" />
+      <LineId Id="1042" Count="0" />
+      <LineId Id="1012" Count="2" />
+      <LineId Id="1016" Count="0" />
+      <LineId Id="1043" Count="0" />
+      <LineId Id="1051" Count="0" />
+      <LineId Id="1018" Count="3" />
+      <LineId Id="1024" Count="0" />
+      <LineId Id="1033" Count="0" />
+      <LineId Id="1023" Count="0" />
+      <LineId Id="1026" Count="0" />
+      <LineId Id="1025" Count="0" />
+      <LineId Id="1038" Count="2" />
+      <LineId Id="180" Count="0" />
+      <LineId Id="1029" Count="2" />
+      <LineId Id="1034" Count="0" />
+      <LineId Id="1032" Count="0" />
+      <LineId Id="1036" Count="0" />
+      <LineId Id="256" Count="2" />
+      <LineId Id="996" Count="5" />
+      <LineId Id="1003" Count="0" />
+      <LineId Id="1005" Count="2" />
+      <LineId Id="1004" Count="0" />
+      <LineId Id="297" Count="0" />
+      <LineId Id="1059" Count="0" />
+      <LineId Id="1061" Count="0" />
+      <LineId Id="1091" Count="0" />
+      <LineId Id="1062" Count="0" />
+      <LineId Id="1092" Count="0" />
+      <LineId Id="1063" Count="0" />
+      <LineId Id="1065" Count="0" />
+      <LineId Id="1068" Count="1" />
+      <LineId Id="1071" Count="0" />
+      <LineId Id="1074" Count="2" />
+      <LineId Id="1078" Count="0" />
+      <LineId Id="1083" Count="4" />
+      <LineId Id="1090" Count="0" />
+      <LineId Id="1089" Count="0" />
+      <LineId Id="1060" Count="0" />
+      <LineId Id="1093" Count="1" />
+      <LineId Id="333" Count="0" />
+      <LineId Id="449" Count="0" />
+      <LineId Id="453" Count="17" />
+      <LineId Id="965" Count="2" />
+      <LineId Id="390" Count="0" />
+      <LineId Id="968" Count="1" />
+      <LineId Id="473" Count="0" />
+      <LineId Id="975" Count="1" />
+      <LineId Id="1055" Count="1" />
+      <LineId Id="1054" Count="0" />
+      <LineId Id="971" Count="0" />
+      <LineId Id="811" Count="101" />
+      <LineId Id="597" Count="0" />
+      <LineId Id="1096" Count="1" />
+      <LineId Id="1099" Count="1" />
+      <LineId Id="1130" Count="3" />
+      <LineId Id="1137" Count="1" />
+      <LineId Id="1168" Count="0" />
+      <LineId Id="1143" Count="2" />
+      <LineId Id="1147" Count="0" />
+      <LineId Id="1159" Count="1" />
+      <LineId Id="1162" Count="5" />
+      <LineId Id="1153" Count="2" />
+      <LineId Id="1157" Count="1" />
+      <LineId Id="1120" Count="1" />
+      <LineId Id="1109" Count="5" />
+      <LineId Id="1116" Count="3" />
+      <LineId Id="1098" Count="0" />
+      <LineId Id="596" Count="0" />
+      <LineId Id="249" Count="6" />
+      <LineId Id="196" Count="0" />
+      <LineId Id="161" Count="1" />
+      <LineId Id="104" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

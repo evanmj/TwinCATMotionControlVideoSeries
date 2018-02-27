@@ -1,0 +1,8 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4022.9">
+  <GVL Name="Global_Variables" Id="{50f738d8-8e33-415b-bcc2-793616d4f251}">
+    <Declaration><![CDATA[VAR_GLOBAL
+	
+END_VAR]]></Declaration>
+  </GVL>
+</TcPlcObject>

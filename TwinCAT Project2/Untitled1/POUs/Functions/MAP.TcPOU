@@ -1,0 +1,34 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4022.9">
+  <POU Name="MAP" Id="{272632a0-ee8f-4a2e-adf4-67b985dedfce}" SpecialFunc="None">
+    <Declaration><![CDATA[// Just like arduino 'Map".  Rescales.  Evanmj@gmail.com
+FUNCTION MAP : DINT
+VAR_INPUT
+	x : DINT;
+	in_min : DINT;
+	in_max : DINT;
+	out_min : DINT;
+	out_max : DINT;
+	
+END_VAR
+VAR
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF ((in_max - in_min) + out_min) <> 0 THEN
+	MAP := DINT_TO_INT((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min);
+ELSE
+	MAP := 0;
+END_IF
+
+RETURN;
+
+]]></ST>
+    </Implementation>
+    <LineIds Name="MAP">
+      <LineId Id="3" Count="8" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
